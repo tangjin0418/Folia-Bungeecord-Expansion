@@ -5,6 +5,7 @@ import com.google.common.collect.Iterables;
 import com.google.common.io.ByteArrayDataInput;
 import com.google.common.io.ByteArrayDataOutput;
 import com.google.common.io.ByteStreams;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import me.clip.placeholderapi.expansion.Configurable;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import me.clip.placeholderapi.expansion.Taskable;
@@ -14,7 +15,6 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 import org.bukkit.scheduler.BukkitTask;
 
-import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.lang.reflect.Field;
 import java.util.Collections;
@@ -34,14 +34,15 @@ public final class BungeeExpansion extends PlaceholderExpansion implements Plugi
     private static final Splitter SPLITTER = Splitter.on(",").trimResults();
 
 
-    private final Map<String, Integer>        counts = new HashMap<>();
-    private final AtomicReference<BukkitTask> cached = new AtomicReference<>();
+    private final Map<String, Integer> counts = new HashMap<>();
+    private final AtomicReference<ScheduledTask> cached = new AtomicReference<>();
 
     private static Field inputField;
 
     static {
         try {
-            inputField = Class.forName("com.google.common.io.ByteStreams$ByteArrayDataInputStream").getDeclaredField("input");
+            inputField = Class.forName("com.google.common.io.ByteStreams$ByteArrayDataInputStream")
+                              .getDeclaredField("input");
             inputField.setAccessible(true);
         } catch (Exception e) {
             e.printStackTrace();
@@ -88,19 +89,18 @@ public final class BungeeExpansion extends PlaceholderExpansion implements Plugi
 
     @Override
     public void start() {
-        final BukkitTask task = Bukkit.getScheduler().runTaskTimer(getPlaceholderAPI(), () -> {
+        final ScheduledTask task = Bukkit.getGlobalRegionScheduler().runAtFixedRate(getPlaceholderAPI(), (s) -> {
 
             if (counts.isEmpty()) {
                 sendServersChannelMessage();
-            }
-            else {
+            } else {
                 counts.keySet().forEach(this::sendPlayersChannelMessage);
             }
 
-        }, 20L * 2L, 20L * getLong(CONFIG_INTERVAL, 30));
+        }, 20 * 2, getLong(CONFIG_INTERVAL, 30) * 20);
 
 
-        final BukkitTask prev = cached.getAndSet(task);
+        final ScheduledTask prev = cached.getAndSet(task);
         if (prev != null) {
             prev.cancel();
         } else {
@@ -111,7 +111,7 @@ public final class BungeeExpansion extends PlaceholderExpansion implements Plugi
 
     @Override
     public void stop() {
-        final BukkitTask prev = cached.getAndSet(null);
+        final ScheduledTask prev = cached.getAndSet(null);
         if (prev == null) {
             return;
         }
@@ -135,13 +135,21 @@ public final class BungeeExpansion extends PlaceholderExpansion implements Plugi
         try {
             DataInputStream stream = (DataInputStream) inputField.get(in);
             switch (in.readUTF()) {
-                    case PLAYERS_CHANNEL:
-                        if (stream.available() == 0) return; // how ?
-                        final String server = in.readUTF();
-                        if (stream.available() == 0) { // how ? x2
-                            getPlaceholderAPI().getLogger().log(Level.SEVERE, String.format("[%s] Could not get the player count from server %s.", getName(), server));
-                            counts.put(server.toLowerCase(), 0);
-                        } else counts.put(server.toLowerCase(), in.readInt());
+                case PLAYERS_CHANNEL:
+                    if (stream.available() == 0) return; // how ?
+                    final String server = in.readUTF();
+                    if (stream.available() == 0) { // how ? x2
+                        getPlaceholderAPI().getLogger()
+                                           .log(
+                                                   Level.SEVERE,
+                                                   String.format(
+                                                           "[%s] Could not get the player count from server %s.",
+                                                           getName(),
+                                                           server
+                                                   )
+                                           );
+                        counts.put(server.toLowerCase(), 0);
+                    } else counts.put(server.toLowerCase(), in.readInt());
                     break;
                 case SERVERS_CHANNEL:
                     SPLITTER.split(in.readUTF()).forEach(serverName -> counts.putIfAbsent(serverName.toLowerCase(), 0));
@@ -154,7 +162,8 @@ public final class BungeeExpansion extends PlaceholderExpansion implements Plugi
 
 
     private void sendServersChannelMessage() {
-        sendMessage(SERVERS_CHANNEL, out -> { });
+        sendMessage(SERVERS_CHANNEL, out -> {
+        });
     }
 
     private void sendPlayersChannelMessage(final String serverName) {
